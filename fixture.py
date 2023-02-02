@@ -12,6 +12,7 @@ matches_team_indexes = []
 team_count = 0
 total_weeks_in_fixture = 0
 matches_per_week = 0
+weeks_remaining = 0
 
 app = FastAPI()
 
@@ -50,54 +51,90 @@ def updateChances():
     for t in teams:
         t.currentChance = t.strength / total
 
+def normalizeChances():
+    total = 0
+    for t in teams:
+        total += t.currentChance   
+    diff = (total - 1.0000)
+    diff_remainder = 0
+    for t in teams:
+        if t.currentChance >= (diff * t.currentChance): 
+            t.currentChance -= (diff * t.currentChance)
+        else:
+            diff_remainder += t.currentChance
+            t.currentChance = 0
+            
+    if diff_remainder > 0:
+        for t in teams:
+            if t.currentChance >= (diff_remainder * t.currentChance): 
+                t.currentChance -= (diff_remainder * t.currentChance)
+    
+    
+def distributePenalty(winnerIDList, opponent_total_chance, penaltyAmount):
+    for t in teams:
+        if t.ID not in winnerIDList:
+            t.currentChance -= ((t.currentChance / opponent_total_chance) * penaltyAmount)
+
 def calculateMatchResult(team_home, team_visitor):
-    total_goals = random.choices(list(range(11)), weights=(40,50,50,40,35,30,20,10,5,2,1), k=1)[0]
+    total_goals = random.choice(list(range(11)))
     
-    team_home_goal_count = round(total_goals * (team_home.currentChance/(team_home.currentChance+team_visitor.currentChance)))
-    team_visitor_goal_count = round(total_goals * (team_visitor.currentChance/(team_home.currentChance+team_visitor.currentChance)))
+    team_home_goal_count = round(total_goals * (team_home.currentChance/(team_home.currentChance+team_visitor.currentChance + 0.0001)))
+    team_visitor_goal_count = round(total_goals * (team_visitor.currentChance/(team_home.currentChance+team_visitor.currentChance + 0.0001)))
     
-    if team_home_goal_count> team_visitor_goal_count: 
-        if team_home.strength < 100:
-            team_home.strength += 1
-        if team_visitor.strength > 1:
-            team_visitor.strength -= 1
-    
-    elif team_visitor_goal_count > team_home_goal_count:
-        if team_visitor.strength < 100:
-            team_visitor.strength += 1
-        if team_home.strength > 1:
-            team_home.strength -= 1
+    if team_home_goal_count> team_visitor_goal_count:  
+        opponent_total_chance = 1 - team_home.currentChance
+        team_home.currentChance += (team_home.currentChance / weeks_remaining)
+        distributePenalty([team_home.ID], opponent_total_chance, team_home.currentChance / weeks_remaining)
         
-    updateChances()
+    elif team_visitor_goal_count > team_home_goal_count:
+        opponent_total_chance = 1 - team_visitor.currentChance
+        team_visitor.currentChance += (team_visitor.currentChance / weeks_remaining)
+        distributePenalty([team_visitor.ID], opponent_total_chance, team_visitor.currentChance / weeks_remaining)
+                
+    elif team_home_goal_count == team_visitor_goal_count: 
+        opponent_total_chance = 1 - (team_home.currentChance + team_visitor.currentChance)
+        earned_chance_home = (team_home.currentChance / weeks_remaining)/3
+        team_home.currentChance += earned_chance_home
+        earned_chance_visitor = (team_visitor.currentChance / weeks_remaining)/3
+        team_visitor.currentChance += earned_chance_visitor
+        distributePenalty([team_home.ID, team_visitor.ID], opponent_total_chance, earned_chance_home + earned_chance_visitor)
+        
+    #updateChances()
+    normalizeChances()
     
     return team_home_goal_count, team_visitor_goal_count
 
 def getChances():
     label = ""
-    updateChances()
+    #updateChances()
+    normalizeChances()
+    
     for t in teams:
         label += "\t" + t.name+": % "+ str(round(t.currentChance * 100, 1)) + "\n"
     return label
        
 @app.get("/")
 def read_root():
-    return {"Output": "Use to /fixture/number_of_teams to execute program!"}
+    return {"Output": "Use '/fixture/number_of_teams' to execute program!"}
 
 
 @app.get("/fixture/{number_of_teams}", response_class=PlainTextResponse)
 def read_item(number_of_teams: int):
     # show the fixture, play the league and print results according to number of teams
     global output
+    global weeks_remaining
     team_count = number_of_teams
     total_weeks_in_fixture = (team_count-1)*2
     matches_per_week = int(team_count/2)
-
+    weeks_remaining = total_weeks_in_fixture + 1
+    
     for i in range(team_count):
         name = createName()
         strength = random.randint(1, 100)
         t = Team(str(i).zfill(3), name, strength)
         teams.append(t)
     
+    updateChances()
     addTeamInfo()
     
     overlap_count = 1
@@ -126,6 +163,8 @@ def read_item(number_of_teams: int):
     
     for i,m in enumerate(matches_team_indexes):
         if i % matches_per_week == 0:
+            weeks_remaining -= 1
+            
             output += "\nChances of championships before Week "+ str(int(i / matches_per_week)+1)+":\n"
             
             output += getChances()
@@ -136,8 +175,8 @@ def read_item(number_of_teams: int):
         
         output += "\t" + teams[int(m[0:3])].name + " " + str(home_score) + " - "+ str(visitor_score) + " " + teams[int(m[3:6])].name + "\n"
 
-    
+    #return f'Output: {output}'
     return output
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="localhost", port= 8080)
+    uvicorn.run(app, host="localhost", port= 8080) 
